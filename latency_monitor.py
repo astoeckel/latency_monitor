@@ -81,6 +81,8 @@ def main_client():
     """
     #CLIENT_BEGIN#
     import time, json, sys
+    sys.stderr.buffer.write(b"\"Connected\"\n")
+    sys.stderr.buffer.flush()
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
@@ -243,6 +245,7 @@ def _handle_data(logfile):
         if head:
             return True
 
+        t = time.monotonic()
         with open(logfile, 'rb') as f:
             req.wfile.write(b'[')
             first = True
@@ -250,10 +253,12 @@ def _handle_data(logfile):
                 line = f.readline()
                 if not line:
                     break
-                if not first:
-                    req.wfile.write(b',\n ')
-                req.wfile.write(line[:-1])
-                first = False
+                obj = json.loads(str(line, 'utf-8'))
+                if (t - obj["sst"]) < (24 * 60 * 60):
+                    if not first:
+                        req.wfile.write(b',\n ')
+                    req.wfile.write(line[:-1])
+                    first = False
             req.wfile.write(b']\n')
         return True
 
@@ -419,8 +424,9 @@ class Endpoint:
         self._stderr_pipe_in, self._stderr_pipe_out = None, None
         self._stdin_pipe_in, self._stdin_pipe_out = None, None
 
-        # Timestamps indicating when the last write was
+        # Timestamp indicating when the last write was
         self._last_write = None
+        self._got_response = False
 
         # Initialize the standard out and standard err buffers
         self._stdout_buf = b""
@@ -449,7 +455,7 @@ class Endpoint:
             return False
 
     def time_till_next_write(self, ts, interval):
-        if not self.is_open:
+        if (not self.is_open) or (not self._got_response):
             # If this endpoint is not open, don't care
             return interval
         elif self._last_write is None:
@@ -474,7 +480,7 @@ class Endpoint:
         self._stdin_pipe_in, self._stdin_pipe_out = os.pipe()
 
         # Run the process
-        logger.debug("Connecting to endpoint %s", self._ssh_endpoint)
+        logger.debug("Connecting to endpoint %s", self.name)
         self._process = subprocess.Popen(
             self._args,
             shell=False,
@@ -489,6 +495,7 @@ class Endpoint:
 
         # Reset the timestamps
         self._last_write = None
+        self._got_response = False
 
         # Reset the per-connection sequence number and increment the connection
         # number
@@ -544,7 +551,11 @@ class Endpoint:
         lines = getattr(self, bufname).split(b"\n")
         res = []
         for line in lines[:-1]:
-            res.append(str(line, "utf-8"))
+            if line == b"\"Connected\"":
+                logger.info("Successfully connected to endpoint %s", self.name)
+                self._got_response = True
+            else:
+                res.append(str(line, "utf-8"))
         setattr(self, bufname, lines[-1])
         return res
 
@@ -700,7 +711,7 @@ def main_server_construct_argparse():
                         required=False,
                         help="Network port to bind the server to.")
     parser.add_argument("--interval",
-                        default=1.0,
+                        default=6.0,
                         type=float,
                         required=False,
                         help="Ping interval in seconds.")

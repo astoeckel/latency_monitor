@@ -142,11 +142,7 @@ window.addEventListener("load", function() {
 		// datapoints. Plot the data into the frame
 		let idx = 0;
 		for (let endpoint of data.endpoints) {
-			// Extract the time series from the raw data
-			const [rtt_avg, timeseries] = build_timeseries_for_endpoint(idx, data.interval, data.time, data.data);
-			console.log(rtt_avg, endpoint);
-
-			// Create two divs for the time
+			// Create the divs for the chart
 			const div_chart_cntr = document.createElement("div");
 			const h1_header = document.createElement("h1");
 			const div_chart = document.createElement("div");
@@ -159,12 +155,17 @@ window.addEventListener("load", function() {
 			div_chart_cntr.appendChild(div_chart);
 			div_charts.appendChild(div_chart_cntr);
 
+			// Extract the time series from the raw data
+			const [rtt_avg, timeseries] = build_timeseries_for_endpoint(idx, data.interval, data.time, data.data);
+			if (timeseries[0].length < 2) {
+				div_chart.innerText = "Not enough data yet.";
+				continue;
+			}
+
 			const main = new MG.LineChart({
 				"data": timeseries,
-				"width": 600,
-				"height": 200,
-				"top": 200,
-				"bottom": 0,
+				"width": 1200,
+				"height": 300,
 				"target": "#chart_" + idx,
 				"legend": ['TX Latency', 'RTT Latency'],
 				"yAxis": {"label": "Latency (ms)"},
