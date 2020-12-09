@@ -95,11 +95,11 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 	const res = [[], []];
 
 	// Processes data within one connection sequence
-	function push_cs(buf) {
+	function push_cs(buf, last_sst, last_ls) {
 		// We need at least two data points for each connection sequence.
 		// Otherwise the least-squares won't work.
 		if (buf.length < 2) {
-			return 0.0;
+			return [0.0, last_ls];
 		}
 
 		// Compute the average round-trip-time. We'll use this for outlier
@@ -130,7 +130,6 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 		// Iterate over the buffer again, this time computing the tx latency,
 		// the rx latency, as well as the corresponding time. If there is a gap
 		// in the local sequence number "ls", insert a gap into the chart
-		let last_ls = 0;
 		for (let i = 0; i < buf.length; i++) {
 			// Fetch the "server client receive time", the "server send time",
 			// and the "server receive time"
@@ -166,31 +165,32 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 			// Remember the last local sequence number
 			last_ls = buf[i].ls;
 			last_sst = sst;
-
-			// Accumulate the average
-			rtt_accu += rtt_latency;
 		}
-		return rtt_accu;
-	}
+		return [rtt_accu, last_ls];
+	};
 
 	// Extract all entries with the same connection sequence number
+	const N_max = (600.0 / interval) | 0;
+	let last_ls = 0;
 	let last_cs = 0;
 	let last_sst = null;
-	let rtt_accu = 0.0;
+	let rtt_accu = 0.0, rtt_accu_batch = 0.0;
 	let buf = [];
 	for (let i = 0; i < data.length; i++) {
 		if (data[i].i != idx) {
 			continue;
 		}
-		if (data[i].cs != last_cs) {
-			rtt_accu += push_cs(buf, last_sst);
+		if ((data[i].cs != last_cs) || ((buf.length > N_max) && (data.length - i > N_max / 2))) {
+			[rtt_accu_batch, last_ls] = push_cs(buf, last_sst, last_ls);
+			rtt_accu += rtt_accu_batch;
 			last_sst = data[i].sst;
 			buf = [];
 			last_cs = data[i].cs;
 		}
 		buf.push(data[i])
 	}
-	rtt_accu += push_cs(buf, last_sst);
+	[rtt_accu_batch, last_ls] = push_cs(buf, last_sst, last_ls);
+	rtt_accu += rtt_accu_batch;
 	return [rtt_accu / data.length, res];
 }
 
@@ -235,7 +235,7 @@ window.addEventListener("load", function() {
 				"target": "#chart_" + idx,
 				"legend": ['TX Latency', 'RTT Latency'],
 				"yAxis": {"label": "Latency (ms)"},
-				"yScale": {"minValue": 0, "maxValue": rtt_avg * 5.0},
+				"yScale": {"minValue": 0, "maxValue": rtt_avg * 5000.0},
 				"area": true,
 				"missing_is_hidden": true,
 			});
