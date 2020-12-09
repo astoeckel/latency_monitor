@@ -744,14 +744,14 @@ def main_server(argv):
 
     # Run the webserver from the main thread
     Server = _construct_http_server_class(args)
-    with socketserver.TCPServer((args.bind, args.port), Server) as httpd:
-        # Wait for the webserver to exit
-        logger.info("Serving on http://{}:{}/".format(args.bind, args.port))
-        try:
-            while True:
-                httpd.handle_request()
-        except KeyboardInterrupt:
-            pass
+    httpd = socketserver.TCPServer((args.bind, args.port), Server)
+    # Wait for the webserver to exit
+    logger.info("Serving on http://{}:{}/".format(args.bind, args.port))
+    try:
+        while True:
+            httpd.handle_request()
+    except KeyboardInterrupt:
+        pass
 
     # Wait for the collection thread
     logger.info("Waiting for the collection thread to finish")
