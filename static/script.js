@@ -39,6 +39,58 @@ async function load_data() {
 	};
 }
 
+/**
+ * For the given x, y pairs computes the parameters of a line mx + b that
+ * minimizes quadratic error. This problem can be phrased as follows:
+ *
+ * y⃑ = A w⃑
+ *
+ * where y⃑ is the vector with all y-coordinates, A is a n x 2 matrix
+ * containing ones in the first column (for the bias term) and the vector
+ * of all x-coordinates in the second column, and w⃑ is the 2 x 1 vector
+ * (b, m).
+ *
+ * Now, the regularised least squares solution for this problem is
+ *
+ * w⃑ = (A^T A + λI)^-1 A^T y⃑
+ *
+ * The matrix A^T A is a 2 x 2 matrix, so the inverse is trivial to compute.
+ *
+ * @param xs: array of x-values.
+ * @param ys: array of y-values.
+ * @return b, m, rmse
+ */
+function linear_regression(xs, ys) {
+	// Compute A^T A, track the maximum and minimum value in xs
+	if ((!xs.length) || (!ys.length) || (xs.length !== ys.length)) {
+		throw "xs and ys must be arrays and have the same non-zero length";
+	}
+	let n = xs.length;
+	let a11 = n + 0.0, a12 = 0.0, a22 = 0.0; // a21 = a12
+	for (let i = 0; i < n; i++) {
+		a12 += xs[i] + 0.0;
+		a22 += xs[i] * xs[i] + 0.0;
+	}
+
+	// Invert A
+	let det = a11 * a22 - a12 * a12;
+	let ai11 = a22 / det, ai22 = a11 / det, ai12 = -a12 / det;
+
+	// Compute A^T y⃑
+	let aty1 = 0.0, aty2 = 0.0;
+	for (let i = 0; i < n; i++) {
+		aty1 += ys[i];
+		aty2 += ys[i] * xs[i];
+	}
+
+	// Compute w⃑ = (A^T A + λI)^-1 A^T y⃑
+	const b = ai11 * aty1 + ai12 * aty2;
+	const m = ai12 * aty1 + ai22 * aty2;
+
+	return [b, m];
+}
+
+
 function build_timeseries_for_endpoint(idx, interval, time, data) {
 	const res = [[], []];
 
@@ -50,17 +102,30 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 			return 0.0;
 		}
 
+		// Compute the average round-trip-time. We'll use this for outlier
+		// detection.
+		let rtt_accu = 0.0;
+		for (let i = 0; i < buf.length; i++) {
+			const sst = buf[i].sst, srt = buf[i].srt;
+			rtt_accu += (srt - sst);
+		}
+		const rtt_avg = rtt_accu / buf.length;
+
 		// Fit a line to the client timestamps vs. the server timestamps using
 		// least squares. This way we can map client-side timestamps to
 		// server-side timestamps and approximate the TX and RX latency.
 		const xs = [], ys = []
-		let offs = 0;
+		const crt0 = buf[0].crt;
+		const sst0 = buf[0].sst;
 		for (let i = 0; i < buf.length; i++) {
 			const crt = buf[i].crt, sst = buf[i].sst, srt = buf[i].srt;
-			offs += 0.5 * ((sst - crt) + (srt - crt));
+			const rtt = srt - sst;
+			if (rtt < 2.0 * rtt_avg) {
+				xs.push(crt - crt0);
+				ys.push(sst + 0.5 * (srt - sst) - sst0);
+			}
 		}
-		offs /= buf.length;
-		rtt_accu = 0.0;
+		let [offs, drift] = linear_regression(xs, ys);
 
 		// Iterate over the buffer again, this time computing the tx latency,
 		// the rx latency, as well as the corresponding time. If there is a gap
@@ -69,7 +134,8 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 		for (let i = 0; i < buf.length; i++) {
 			// Fetch the "server client receive time", the "server send time",
 			// and the "server receive time"
-			const scrt = buf[i].crt + offs, sst = buf[i].sst, srt = buf[i].srt;
+			const scrt = drift * (buf[i].crt - crt0) + offs + sst0;
+			const sst = buf[i].sst, srt = buf[i].srt;
 			const rtt_latency = Math.round((srt - sst) * 100000.0) / 100.0;
 			const tx_latency = Math.round(((scrt > sst) ? scrt - sst : 0.0) * 100000.0) / 100.0;
 
@@ -102,7 +168,7 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 			last_sst = sst;
 
 			// Accumulate the average
-			rtt_accu+= rtt_latency;
+			rtt_accu += rtt_latency;
 		}
 		return rtt_accu;
 	}
@@ -110,7 +176,7 @@ function build_timeseries_for_endpoint(idx, interval, time, data) {
 	// Extract all entries with the same connection sequence number
 	let last_cs = 0;
 	let last_sst = null;
-	let rtt_accu= 0.0;
+	let rtt_accu = 0.0;
 	let buf = [];
 	for (let i = 0; i < data.length; i++) {
 		if (data[i].i != idx) {
