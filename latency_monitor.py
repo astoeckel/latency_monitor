@@ -156,7 +156,7 @@ def _handle_fs(document_root, static_filename=None):
             else:
                 filename = static_filename
         elif match:
-            filename = os.path.join(document_root, match[0][1:])
+            filename = os.path.join(document_root, match.group(0)[1:])
 
         # If no file has been found, return
         if (not filename) or (not os.path.isfile(filename)):
